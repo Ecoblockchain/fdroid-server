@@ -34,9 +34,13 @@ import metadata
 config = None
 options = None
 
-def get_default_config():
-    return {
-        'sdk_path': os.getenv("ANDROID_HOME"),
+# Works very much like defaultdict(), with the defaults being the ones in
+# default_config. Anything not in default_config nor explicitly set will not
+# be in the config.
+class Config:
+
+    default = {
+        'sdk_path': "$ANDROID_HOME",
         'ndk_path': "$ANDROID_NDK",
         'build_tools': "19.0.3",
         'ant': "ant",
@@ -56,6 +60,58 @@ def get_default_config():
         'keyaliases': { },
     }
 
+    def __init__(self):
+        self._config = { }
+        self.__update_merged()
+
+    def __update_merged(self):
+        self._merged = dict(self.default.items() + self._config.items())
+
+    def __len__(self):
+        return len(self._merged)
+
+    def __getitem__(self, key):
+        return self._merged[key]
+
+    def __setitem__(self, key, value):
+        self._config[key] = value
+        self.__update_merged()
+
+    def __delitem__(self, key):
+        if key in self._config:
+            del self._config[key]
+        self.__update_merged()
+
+    def __iter__(self):
+        return iter(self._merged)
+
+    def __contains__(self, key):
+        return key in self._merged
+
+    # Return true if key was explicitly set, false otherwise (if it's not a
+    # valid key or is only provided by self.default)
+    def hasset(self, key):
+        return key in self._config
+
+    # Expand environment variables
+    # First the user-defined, then the remaining defaults
+    def expandvars(self):
+        self._expandvars_dict(self.default)
+        self._expandvars_dict(self._config)
+        self.__update_merged()
+
+    def _expandvars_dict(self, mydict):
+        for k, v in mydict.items():
+            if type(v) != str:
+                continue
+            if len(v) == 0:
+                continue
+            new_v = os.path.expanduser(v)
+            new_v = os.path.expandvars(v)
+            if new_v != v:
+                mydict[k] = new_v
+
+
 def read_config(opts, config_file='config.py'):
     """Read the repository config
 
@@ -72,37 +128,31 @@ def read_config(opts, config_file='config.py'):
 
     options = opts
 
-    config = {}
+    config = Config()
 
     logging.debug("Reading %s" % config_file)
-    execfile(config_file, config)
+    configdict = {}
+    execfile(config_file, configdict)
+    for k, v in configdict.items():
+        config[k] = v
+    del configdict
 
     # smartcardoptions must be a list since its command line args for Popen
-    if 'smartcardoptions' in config:
+    if config['smartcardoptions']:
         config['smartcardoptions'] = config['smartcardoptions'].split(' ')
-    elif 'keystore' in config and config['keystore'] == 'NONE':
+    elif config['keystore'] == 'NONE':
         # keystore='NONE' means use smartcard, these are required defaults
         config['smartcardoptions'] = ['-storetype', 'PKCS11', '-providerName',
                                       'SunPKCS11-OpenSC', '-providerClass',
                                       'sun.security.pkcs11.SunPKCS11',
                                       '-providerArg', 'opensc-fdroid.cfg']
 
-    defconfig = get_default_config()
-    for k, v in defconfig.items():
-        if k not in config:
-            config[k] = v
-
-    # Expand environment variables
-    for k, v in config.items():
-        if type(v) != str:
-            continue
-        v = os.path.expanduser(v)
-        config[k] = os.path.expandvars(v)
+    config.expandvars()
 
     if not test_sdk_exists(config):
         sys.exit(3)
 
-    if any(k in config for k in ["keystore", "keystorepass", "keypass"]):
+    if any(config.hasset(k) for k in ["keystore", "keystorepass", "keypass"]):
         st = os.stat(config_file)
         if st.st_mode & stat.S_IRWXG or st.st_mode & stat.S_IRWXO:
             logging.warn("unsafe permissions on {0} (should be 0600)!".format(config_file))

@@ -120,7 +120,8 @@ def main():
         examplesdir = prefix + '/examples'
 
     fdroiddir = os.getcwd()
-    test_config = common.get_default_config()
+    test_config = common.Config()
+    test_config.expandvars()
 
     # track down where the Android SDK is, the default is to use the path set
     # in ANDROID_HOME if that exists, otherwise None
